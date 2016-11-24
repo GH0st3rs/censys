@@ -11,6 +11,7 @@ import (
 
 const APIURL = "https://www.censys.io/api/v1"
 const SearchURL = "search"
+const ExportURL = "export"
 
 type Metadata struct {
 	Count int    `json:"count"`
@@ -47,29 +48,36 @@ type censysSearchCertificates struct {
 	} `json:"results"`
 }
 
-func getErrorString(StatusCode int) error {
+type censysExport struct {
+	Status string `json:"status"`
+	Config struct {
+		Format   string `json:"format"`
+		Compress bool   `json:"compress"`
+		Headers  bool   `json:"headers"`
+		Flatten  bool   `json:"flatten"`
+		Query    string `json:"query"`
+	} `json:"configuration"`
+	JobID string `json:"job_id"`
+}
+
+func getErrorString(StatusCode int, url, paramStr string) error {
 	switch StatusCode {
 	case 400:
-		return fmt.Errorf("Error %d -> Query could not be parsed", StatusCode)
+		return fmt.Errorf("Error %d -> Query could not be parsed. Url: %s. Param: %s", StatusCode, url, paramStr)
 	case 404:
-		return fmt.Errorf("Error %d -> Page not found", StatusCode)
+		return fmt.Errorf("Error %d -> Page not found. Url: %s. Param: %s", StatusCode, url, paramStr)
 	case 429:
-		return fmt.Errorf("Error %d -> Rate limit exceeded", StatusCode)
+		return fmt.Errorf("Error %d -> Rate limit exceeded. Url: %s. Param: %s", StatusCode, url, paramStr)
 	case 500:
-		return fmt.Errorf("Error %d -> Internal server error", StatusCode)
+		return fmt.Errorf("Error %d -> Internal server error. Url: %s. Param: %s", StatusCode, url, paramStr)
 	default:
-		return fmt.Errorf("unknown error code %d", StatusCode)
+		return fmt.Errorf("unknown error code %d. Url: %s. Param: %s", StatusCode, url, paramStr)
 	}
 }
 
-//Search Engine function
-func Search(auth [2]string, index string, query string, page int) (*[]byte, error) {
-	//Make request URL and post param
-	url := fmt.Sprintf("%s/%s/%s", APIURL, SearchURL, index)
-	//	fields := ``
-	paramStr := fmt.Sprintf(`{"query": "%s", "page": %d, "fields":[]}`, query, page)
-	data := bytes.NewBuffer([]byte(paramStr))
-	req, err := http.NewRequest("POST", url, data)
+func request(auth [2]string, url, paramStr *string) (*[]byte, error) {
+	data := bytes.NewBuffer([]byte(*paramStr))
+	req, err := http.NewRequest("POST", *url, data)
 	if err != nil {
 		panic(err)
 	}
@@ -79,27 +87,39 @@ func Search(auth [2]string, index string, query string, page int) (*[]byte, erro
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if resp.StatusCode != 200 {
-		return nil, getErrorString(resp.StatusCode)
+		return nil, getErrorString(resp.StatusCode, *url, *paramStr)
 	}
 	defer resp.Body.Close()
-	//Read body request
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-
 	return &body, nil
+}
+
+//Search Engine function
+func Search(auth [2]string, index string, query string, page int) (*[]byte, error) {
+	//Make request URL and post param
+	url := fmt.Sprintf("%s/%s/%s", APIURL, SearchURL, index)
+	//	fields := ``
+	paramStr := fmt.Sprintf(`{"query": "%s", "page": %d, "fields":[]}`, query, page)
+
+	//Read body request
+	body, err := request(auth, &url, &paramStr)
+	if err != nil {
+		return nil, err
+	}
+
+	return body, nil
 }
 
 //Search IPv4
 func SearchIPv4(auth [2]string, query string, page int) (*censysSearchIPv4, error) {
-	const index = "ipv4"
 
-	body, err := Search(auth, index, query, page)
+	body, err := Search(auth, "ipv4", query, page)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println(string(*body))
 
 	cS := censysSearchIPv4{}
 	if err = json.Unmarshal(*body, &cS); err != nil {
@@ -111,13 +131,11 @@ func SearchIPv4(auth [2]string, query string, page int) (*censysSearchIPv4, erro
 
 //Search WebSites
 func SearchWebSites(auth [2]string, query string, page int) (*censysSearchWebsites, error) {
-	const index = "websites"
 
-	body, err := Search(auth, index, query, page)
+	body, err := Search(auth, "websites", query, page)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println(string(*body))
 
 	cS := censysSearchWebsites{}
 	if err = json.Unmarshal(*body, &cS); err != nil {
@@ -129,9 +147,8 @@ func SearchWebSites(auth [2]string, query string, page int) (*censysSearchWebsit
 
 //Search Certificates
 func SearchCertificates(auth [2]string, query string, page int) (*censysSearchCertificates, error) {
-	const index = "certificates"
 
-	body, err := Search(auth, index, query, page)
+	body, err := Search(auth, "certificates", query, page)
 	if err != nil {
 		return nil, err
 	}
@@ -142,4 +159,37 @@ func SearchCertificates(auth [2]string, query string, page int) (*censysSearchCe
 	}
 
 	return &cS, nil
+}
+
+//Export Engine function
+func Export(auth [2]string, query string) (*censysExport, error) {
+	//Make request URL and post param
+	url := fmt.Sprintf("%s/%s", APIURL, ExportURL)
+	paramStr := fmt.Sprintf(`{"query": "%s", "format":"json"}`, query)
+
+	//Read body request
+	body, err := request(auth, &url, &paramStr)
+	if err != nil {
+		return nil, err
+	}
+
+	cE := censysExport{}
+	if err = json.Unmarshal(*body, &cE); err != nil {
+		return nil, err
+	}
+
+	return &cE, nil
+}
+
+func GetExportStatus(auth [2]string, job_id string) (*[]byte, error) {
+	//Make request URL and post param
+	url := fmt.Sprintf("%s/%s", APIURL, ExportURL)
+
+	//Read body request
+	body, err := request(auth, &url, &job_id)
+	if err != nil {
+		return nil, err
+	}
+
+	return body, nil
 }
